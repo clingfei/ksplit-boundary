@@ -30,7 +30,7 @@ using llvm::Function;
 const char* PROG_NAME = "ksplit-bnd";
 
 void usage() {
-  cout << PROG_NAME << " <driver.bc> <files.txt> " << endl;
+  cout << PROG_NAME << " <driver.bc> <files.txt> <liblcd_funcs.txt>" << endl;
   cout << "\t files.txt contains the absolute path of all the individual bc files in the kernel except drivers dir" << endl;
   cout << "\t e.g., /kernel/path/init/main.bc" << endl;
   cout << "\t by default, this program ignores built-in.o.bc" << endl;
@@ -39,6 +39,8 @@ void usage() {
 
 using LiblcdFuncs = std::set<std::string>;
 using IRModule = std::unique_ptr<Module>;
+using KernelModulesMap = std::unordered_map<std::string, std::set<std::string>>;
+
 
 LiblcdFuncs *liblcdSet;
 
@@ -56,28 +58,14 @@ void populateLiblcdFuncs(std::string fname) {
   }
 }
 
-// Synchronous functions
-// 1) Find the list of declared (but not defined) functions in the driver bc file
-// 2) Parse all the bc files that would eventually go into vmlinux.bc (except drivers folder)
-// 3) Extract a list of bc files in the kernel that has the definitions of the undefined functions in step 1
-int main(int argc, char const *argv[]) {
+KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
+  KernelModulesMap kernel_bc_funcs_map;
+  std::set<std::string> needed_kernel_funcs;
+
   LLVMContext context;
   SMDiagnostic error;
 
-  std::unordered_map<std::string, IRModule> kernel_bc_map;
-  std::unordered_map<std::string, std::set<std::string>> kernel_bc_funcs_map;
-  std::set<std::string> needed_kernel_funcs;
-
-  if (argc != 4) {
-    usage();
-  }
-
-  std::string driver_bc(argv[1]);
-  std::string kernel_bc_fname(argv[2]);
-  std::string liblcd_funcs(argv[3]);
-
-  std::ifstream kernel_bc_file(kernel_bc_fname);
-  populateLiblcdFuncs(liblcd_funcs);
+  std::ifstream kernel_bc_files(kernel_bc);
 
   IRModule driver_mod = parseIRFile(driver_bc, error, context);
 
@@ -97,7 +85,7 @@ int main(int argc, char const *argv[]) {
     }*/
   }
 
-  if (kernel_bc_file.is_open()) {
+  if (kernel_bc_files.is_open()) {
     std::string line;
     std::list<std::string> exclusions = {
       "..", "builtin", "/drivers/"};
@@ -108,19 +96,18 @@ int main(int argc, char const *argv[]) {
       }
       return ok;
     };
-    while (std::getline(kernel_bc_file, line)) {
+    while (std::getline(kernel_bc_files, line)) {
       if (skip_line(line)) {
         // skip this line
         continue;
       }
-      // printf("%s\n", line.c_str());
       IRModule mod = parseIRFile(line, error, context);
  
       auto extract_funcs = [&](auto M) {
         std::set<std::string> needed_funcs;
         // cout << "Module : " << M->getModuleIdentifier() << endl;
         for (Function &fn: *M) {
-          if (fn.isDeclaration() || fn.empty()) {// || liblcdSet->find(fn.getName()) != liblcdSet->end()) {
+          if (fn.isDeclaration() || fn.empty()) {
             continue;
           } else if (needed_kernel_funcs.find(fn.getName().str()) != needed_kernel_funcs.end()) {
             // we need this bc file for kernel.bc
@@ -136,15 +123,39 @@ int main(int argc, char const *argv[]) {
         if (!needed_list.empty()) {
           kernel_bc_funcs_map[line] = needed_list;
         }
-        kernel_bc_map[line] = std::move(mod);
+        //kernel_bc_map[line] = std::move(mod);
       } else {
         cout << "Skipping: " << line << endl;
       }
     }
-    kernel_bc_file.close();
+    kernel_bc_files.close();
+  }
+  return kernel_bc_funcs_map; 
+}
+
+// Synchronous functions
+// 1) Find the list of declared (but not defined) functions in the driver bc file
+// 2) Parse all the bc files that would eventually go into vmlinux.bc (except drivers folder)
+// 3) Extract a list of bc files in the kernel that has the definitions of the undefined functions in step 1
+int main(int argc, char const *argv[]) {
+  LLVMContext context;
+  SMDiagnostic error;
+
+  std::unordered_map<std::string, IRModule> kernel_bc_map;
+
+  if (argc != 4) {
+    usage();
   }
 
-  cout << "Done!" << endl;
+  std::string driver_bc(argv[1]);
+  std::string kernel_bc_files(argv[2]);
+  std::string liblcd_funcs(argv[3]);
+
+  populateLiblcdFuncs(liblcd_funcs);
+
+  auto kernel_bc_funcs_map = synchronousPass(driver_bc, kernel_bc_files);
+
+  cout << "Synchronous pass Done!" << endl;
   for (auto &kv : kernel_bc_funcs_map) {
     cout << kv.first << "\n";
     for (auto &fn : kv.second) {
