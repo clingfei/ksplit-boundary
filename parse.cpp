@@ -6,6 +6,7 @@
 #include <fstream>
 #include <unordered_map>
 
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/SourceMgr.h>
@@ -26,6 +27,8 @@ using llvm::EngineBuilder;
 using llvm::ArrayRef;
 using llvm::GenericValue;
 using llvm::Function;
+using llvm::AttributeList;
+using llvm::Attribute;
 
 const char* PROG_NAME = "ksplit-bnd";
 
@@ -40,6 +43,7 @@ void usage() {
 using LiblcdFuncs = std::set<std::string>;
 using IRModule = std::unique_ptr<Module>;
 using KernelModulesMap = std::unordered_map<std::string, std::set<std::string>>;
+using StringSet = std::set<std::string>;
 
 
 LiblcdFuncs *liblcdSet;
@@ -58,9 +62,53 @@ void populateLiblcdFuncs(std::string fname) {
   }
 }
 
+StringSet getUndefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
+  auto module = mod_ptr.get();
+  StringSet undefined_fns;
+
+  cout << __func__ << ": module: " << module->getModuleIdentifier() << endl;
+
+  for (Function &fn: *module) {
+    // cout << "Checking " << fn.getName().str() << endl;
+    if (fn.isIntrinsic()) {
+      continue;
+    }
+
+    if (fn.isDeclaration() && (liblcdSet->find(std::string(fn.getName().str())) == liblcdSet->end())) {
+      cout << fn.getName().data() << endl;
+      undefined_fns.insert(fn.getName().str());
+    }
+  }
+  return undefined_fns;
+}
+
+StringSet getDefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
+  auto module = mod_ptr.get();
+  StringSet defined_fns;
+
+  cout << __func__ << ": module: " << module->getModuleIdentifier() << endl;
+
+  for (Function &fn: *module) {
+    // cout << "Checking " << fn.getName().str() << endl;
+    if (fn.isIntrinsic()) {
+      continue;
+    }
+
+    // cout << fn.getFunctionType()->printLeft() << endl;
+    //if (fn.getAttributes().hasAttribute(AttributeList::FunctionIndex, Attribute::InlineHint))
+    if (fn.hasLocalLinkage())
+      cout << "Inline function " << fn.getName().data() << endl;
+    if (!fn.isDeclaration()) {// && fn.getFunctionType() == llvm::GlobalValue::ExternalLinkage) {
+      cout << fn.getName().data() << endl;
+      defined_fns.insert(fn.getName().str());
+    }
+  }
+  return defined_fns;
+}
+
 KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
   KernelModulesMap kernel_bc_funcs_map;
-  std::set<std::string> needed_kernel_funcs;
+  StringSet needed_kernel_funcs;
 
   LLVMContext context;
   SMDiagnostic error;
@@ -69,22 +117,71 @@ KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
 
   IRModule driver_mod = parseIRFile(driver_bc, error, context);
 
-  auto dr_mod = driver_mod.get();
-  cout << "driver module: " << dr_mod->getName().data() << endl;
-  for (Function &fn: *dr_mod) {
-    // cout << "Checking " << fn.getName().str() << endl;
-    if (fn.isIntrinsic()) {
-      continue;
+  needed_kernel_funcs = getUndefinedFuncs(driver_mod);
+
+  if (kernel_bc_files.is_open()) {
+    std::string line;
+    // TODO: Exclusions should not omit files from drivers/base
+    std::list<std::string> exclusions = {
+      "..", "builtin", "/drivers/"};
+    auto skip_line = [&](auto line) {
+      bool ok = false;
+      for (auto &s : exclusions) {
+          ok |= (line.find(s) != std::string::npos);
+      }
+      return ok;
+    };
+    while (std::getline(kernel_bc_files, line)) {
+      if (skip_line(line)) {
+        // skip this line
+        continue;
+      }
+      IRModule mod = parseIRFile(line, error, context);
+
+      auto extract_funcs = [&](auto M) {
+        std::set<std::string> needed_funcs;
+        // cout << "Module : " << M->getModuleIdentifier() << endl;
+        for (Function &fn: *M) {
+          if (fn.isDeclaration() || fn.empty()) {
+            continue;
+          } else if (needed_kernel_funcs.find(fn.getName().str()) != needed_kernel_funcs.end()) {
+            // we need this bc file for kernel.bc
+            // cout << "\tMatched function " << fn.getName().data() << endl;
+            needed_funcs.insert(fn.getName().str());
+          }
+        }
+        return needed_funcs;
+      };
+
+      if (mod) {
+        auto needed_list = extract_funcs(mod.get());
+        if (!needed_list.empty()) {
+          kernel_bc_funcs_map[line] = needed_list;
+        }
+        //kernel_bc_map[line] = std::move(mod);
+      } else {
+        cout << "Skipping: " << line << endl;
+      }
     }
-
-    if (fn.isDeclaration() && (liblcdSet->find(std::string(fn.getName().str())) == liblcdSet->end())) {
-      cout << fn.getName().data() << endl;
-      needed_kernel_funcs.insert(fn.getName().str());
-    } /*else {
-      cout << "definition found or liblcd: " << fn.getName().str() << endl;
-    }*/
+    kernel_bc_files.close();
   }
+  return kernel_bc_funcs_map;
+}
 
+void asynchronousPass(std::string driver_bc, std::string kernel_bc) {
+  KernelModulesMap kernel_bc_funcs_map;
+  StringSet needed_kernel_funcs;
+
+  LLVMContext context;
+  SMDiagnostic error;
+
+  std::ifstream kernel_bc_files(kernel_bc);
+
+  IRModule driver_mod = parseIRFile(driver_bc, error, context);
+
+  needed_kernel_funcs = getDefinedFuncs(driver_mod);
+
+#if 0
   if (kernel_bc_files.is_open()) {
     std::string line;
     std::list<std::string> exclusions = {
@@ -130,7 +227,8 @@ KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
     }
     kernel_bc_files.close();
   }
-  return kernel_bc_funcs_map; 
+  return kernel_bc_funcs_map;
+#endif
 }
 
 // Synchronous functions
@@ -156,10 +254,13 @@ int main(int argc, char const *argv[]) {
   auto kernel_bc_funcs_map = synchronousPass(driver_bc, kernel_bc_files);
 
   cout << "Synchronous pass Done!" << endl;
+
   for (auto &kv : kernel_bc_funcs_map) {
     cout << kv.first << "\n";
     for (auto &fn : kv.second) {
       cout << "\t" << fn.data() << "\n";
     }
   }
+
+  asynchronousPass(driver_bc, kernel_bc_files);
 }
