@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include <llvm/IR/Attributes.h>
+#include <llvm/IR/CallSite.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/SourceMgr.h>
@@ -29,6 +30,8 @@ using llvm::GenericValue;
 using llvm::Function;
 using llvm::AttributeList;
 using llvm::Attribute;
+using llvm::dyn_cast;
+using llvm::CallSite;
 
 const char* PROG_NAME = "ksplit-bnd";
 
@@ -94,6 +97,7 @@ StringSet getDefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
       continue;
     }
 
+    // 2 sets of bc files -> O0 -> O0 -finline
     // cout << fn.getFunctionType()->printLeft() << endl;
     //if (fn.getAttributes().hasAttribute(AttributeList::FunctionIndex, Attribute::InlineHint))
     if (fn.hasLocalLinkage())
@@ -104,6 +108,38 @@ StringSet getDefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
     }
   }
   return defined_fns;
+}
+
+// __register_chrdev -> Instruction iterator -> call inst ->
+StringSet extract_transitive_closures(Module *M, StringSet &needed_kernel_funcs) {
+  StringSet needed_funcs;
+  // cout << "Module : " << M->getModuleIdentifier() << endl;
+  for (auto &F: *M) {
+    if (F.isDeclaration() || F.empty()) {
+      continue;
+    } else if (needed_kernel_funcs.find(F.getName().str()) != needed_kernel_funcs.end()) {
+      // we need this bc file for kernel.bc
+      // cout << "\tMatched function " << fn.getName().data() << endl;
+      for (auto &bb : F) {
+        for (auto &I : bb) {
+          auto cs = CallSite(&I);
+          if (!cs.getInstruction()) {
+            continue;
+          }
+          auto called = cs.getCalledValue()->stripPointerCasts();
+          auto fun = dyn_cast<Function>(called);
+          if (fun) {
+            if (fun->isDeclaration() || fun->empty() || fun->isIntrinsic())
+              continue;
+            cout << "Called func : " << fun->getName().str() << endl;
+            needed_funcs.insert(fun->getName().str());
+          }
+        }
+      }
+      needed_funcs.insert(F.getName().str());
+    }
+  }
+  return needed_funcs;
 }
 
 KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
@@ -155,6 +191,7 @@ KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
 
       if (mod) {
         auto needed_list = extract_funcs(mod.get());
+        //auto needed_list = extract_transitive_closures(mod.get(), needed_kernel_funcs);
         if (!needed_list.empty()) {
           kernel_bc_funcs_map[line] = needed_list;
         }
@@ -168,6 +205,11 @@ KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
   return kernel_bc_funcs_map;
 }
 
+// synchronous:
+// list of functions directly reached from the driver
+// asynchronous:
+// list of call sites that indirectly invoke the driver functions
+// 1) which driver function are passed across the boundary (i.e., registered with a subsystem)
 void asynchronousPass(std::string driver_bc, std::string kernel_bc) {
   KernelModulesMap kernel_bc_funcs_map;
   StringSet needed_kernel_funcs;
