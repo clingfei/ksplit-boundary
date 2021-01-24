@@ -1,9 +1,10 @@
 #include <iostream>
 
-#include <string>
-#include <set>
-#include <list>
+#include <filesystem>
 #include <fstream>
+#include <list>
+#include <set>
+#include <string>
 #include <unordered_map>
 
 #include <llvm/IR/Attributes.h>
@@ -11,58 +12,94 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/SourceMgr.h>
-#include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/ExecutionEngine/GenericValue.h>
 
-using std::unique_ptr;
 using std::cout;
 using std::endl;
+using std::unique_ptr;
 
-using llvm::Module;
-using llvm::SMDiagnostic;
-using llvm::LLVMContext;
-using llvm::parseIRFile;
-using llvm::StringRef;
-using llvm::ExecutionEngine;
-using llvm::EngineBuilder;
 using llvm::ArrayRef;
-using llvm::GenericValue;
-using llvm::Function;
-using llvm::AttributeList;
 using llvm::Attribute;
-using llvm::dyn_cast;
+using llvm::AttributeList;
 using llvm::CallSite;
+using llvm::dyn_cast;
+using llvm::Function;
+using llvm::LLVMContext;
+using llvm::Module;
+using llvm::parseIRFile;
+using llvm::SMDiagnostic;
+using llvm::StringRef;
 
-const char* PROG_NAME = "ksplit-bnd";
-
-void usage() {
-  cout << PROG_NAME << " <driver.bc> <files.txt> <liblcd_funcs.txt>" << endl;
-  cout << "\t files.txt contains the absolute path of all the individual bc files in the kernel except drivers dir" << endl;
-  cout << "\t e.g., /kernel/path/init/main.bc" << endl;
-  cout << "\t by default, this program ignores built-in.o.bc" << endl;
-  exit(0);
-}
-
-using LiblcdFuncs = std::set<std::string>;
+// Typedef
+using String = std::string;
+using LiblcdFuncs = std::set<String>;
 using IRModule = std::unique_ptr<Module>;
-using KernelModulesMap = std::unordered_map<std::string, std::set<std::string>>;
-using StringSet = std::set<std::string>;
+using StringSet = std::set<String>;
+using IRModuleMap = std::unordered_map<String, IRModule>;
+using KernelModulesMap = std::unordered_map<String, StringSet>;
+using ModuleMap = std::unordered_map<String, KernelModulesMap>;
+namespace fs = std::filesystem;
+using Path = fs::path;
 
+const char *PROG_NAME = "ksplit-bnd";
+constexpr auto bc_files_dir = "/local/device/bc-files";
+const Path BC_FILES_REPO = Path(bc_files_dir);
+
+const std::map<String, String> driverClassMap = {
+    {"arch/x86", "arch_x86"},        {"drivers/base/regmap", "regmap"},
+    {"drivers/block", "block"},      {"drivers/char", "char"},
+    {"drivers/edac", "edac"},        {"drivers/firmware", "firmware"},
+    {"drivers/foobar", "foobar"},    {"drivers/hwmon", "hwmon"},
+    {"drivers/input", "input"},      {"drivers/i2c", "i2c"},
+    {"drivers/leds", "leds"},        {"drivers/misc", "misc"},
+    {"drivers/net", "net_ethernet"}, {"drivers/pci/hotplug", "pci_hotplug"},
+};
 
 LiblcdFuncs *liblcdSet;
 
-void populateLiblcdFuncs(std::string fname) {
+void usage() {
+  cout << PROG_NAME << " <drivers_bc_list> <kernel_bc_list> <liblcd_funcs.txt>"
+       << endl;
+  cout << "\t <drivers_bc_list> contains the absolute path of all driver.ko.bc "
+          "files"
+       << endl;
+  cout << "\t <kernel_bc_list> contains the absolute path of all the "
+          "individual bc "
+          "files in the kernel"
+       << endl;
+  cout << "\t <liblcd_funcs.txt> contains the list of functions that are "
+          "defined in liblcd"
+       << endl;
+  exit(0);
+}
+
+void populateLiblcdFuncs(String fname) {
   std::ifstream liblcd_funcs(fname);
 
   if (!liblcdSet) {
-    liblcdSet = new std::set<std::string>();
+    liblcdSet = new std::set<String>();
   }
 
   if (liblcd_funcs) {
-    for (std::string line; std::getline(liblcd_funcs, line);) {
+    for (String line; std::getline(liblcd_funcs, line);) {
       liblcdSet->insert(line);
     }
   }
+}
+
+String getDriverClass(String ko_file) {
+  String class_name;
+
+  for (auto &e : driverClassMap) {
+    if (ko_file.find(e.first) != String::npos) {
+      class_name = e.second;
+      break;
+    }
+  }
+  if (class_name.empty()) {
+    cout << "class name empty for " << ko_file << endl;
+  }
+  cout << "class_name: " << class_name << endl;
+  return class_name;
 }
 
 StringSet getUndefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
@@ -71,13 +108,14 @@ StringSet getUndefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
 
   cout << __func__ << ": module: " << module->getModuleIdentifier() << endl;
 
-  for (Function &fn: *module) {
+  for (Function &fn : *module) {
     // cout << "Checking " << fn.getName().str() << endl;
     if (fn.isIntrinsic()) {
       continue;
     }
 
-    if (fn.isDeclaration() && (liblcdSet->find(std::string(fn.getName().str())) == liblcdSet->end())) {
+    if (fn.isDeclaration() &&
+        (liblcdSet->find(String(fn.getName().str())) == liblcdSet->end())) {
       cout << fn.getName().data() << endl;
       undefined_fns.insert(fn.getName().str());
     }
@@ -91,18 +129,16 @@ StringSet getDefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
 
   cout << __func__ << ": module: " << module->getModuleIdentifier() << endl;
 
-  for (Function &fn: *module) {
+  for (Function &fn : *module) {
     // cout << "Checking " << fn.getName().str() << endl;
     if (fn.isIntrinsic()) {
       continue;
     }
 
-    // 2 sets of bc files -> O0 -> O0 -finline
-    // cout << fn.getFunctionType()->printLeft() << endl;
-    //if (fn.getAttributes().hasAttribute(AttributeList::FunctionIndex, Attribute::InlineHint))
     if (fn.hasLocalLinkage())
       cout << "Inline function " << fn.getName().data() << endl;
-    if (!fn.isDeclaration()) {// && fn.getFunctionType() == llvm::GlobalValue::ExternalLinkage) {
+    if (!fn.isDeclaration()) { // && fn.getFunctionType() ==
+                               // llvm::GlobalValue::ExternalLinkage) {
       cout << fn.getName().data() << endl;
       defined_fns.insert(fn.getName().str());
     }
@@ -110,14 +146,15 @@ StringSet getDefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
   return defined_fns;
 }
 
-// __register_chrdev -> Instruction iterator -> call inst ->
-StringSet extract_transitive_closures(Module *M, StringSet &needed_kernel_funcs) {
+StringSet extract_transitive_closures(Module *M,
+                                      StringSet &needed_kernel_funcs) {
   StringSet needed_funcs;
   // cout << "Module : " << M->getModuleIdentifier() << endl;
-  for (auto &F: *M) {
+  for (auto &F : *M) {
     if (F.isDeclaration() || F.empty()) {
       continue;
-    } else if (needed_kernel_funcs.find(F.getName().str()) != needed_kernel_funcs.end()) {
+    } else if (needed_kernel_funcs.find(F.getName().str()) !=
+               needed_kernel_funcs.end()) {
       // we need this bc file for kernel.bc
       // cout << "\tMatched function " << fn.getName().data() << endl;
       for (auto &bb : F) {
@@ -142,65 +179,121 @@ StringSet extract_transitive_closures(Module *M, StringSet &needed_kernel_funcs)
   return needed_funcs;
 }
 
-KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
+// Filter out the kernel bc files by keeping the files we need for the analysis
+KernelModulesMap filterKernelBcFiles(String kernel_bc_list) {
+  KernelModulesMap kernel_map;
+  std::ifstream kernel_bc_files(kernel_bc_list);
+
+  if (kernel_bc_files.is_open()) {
+    String line;
+
+    std::list<String> driver_dirs = {
+        "drivers/base",     "drivers/edac/edac_mc",  "drivers/clk",
+        "drivers/acpi",     "drivers/powercap",      "drivers/ptp",
+        "drivers/oprofile", "drivers/rtc/.rtc-lib",  "drivers/input",
+        "drivers/pci",      "drivers/edac/.edac_mc", "drivers/i2c"};
+
+    std::list<String> exclusions = {"..", "builtin", "/drivers/", ".mod.o.bc",
+                                    "arch/x86/boot"};
+
+    auto skip_line = [&](auto line) {
+      // Check if the line contains any of the exclusion list
+      for (auto &s : exclusions) {
+        auto pos = line.find(s);
+        if (pos != String::npos) {
+          // if a valid match is found, check if it is one of the driver_dirs
+          // we need. If needed, do not skip
+          for (auto &s1 : driver_dirs) {
+            auto pos2 = line.find(s1);
+            if (pos2 != String::npos) {
+              return false;
+            }
+          }
+          return true;
+        }
+      }
+      return false;
+    };
+
+    while (std::getline(kernel_bc_files, line)) {
+      if (skip_line(line)) {
+        continue;
+      }
+      LLVMContext context;
+      SMDiagnostic error;
+      IRModule mod = parseIRFile(line, error, context);
+
+      if (mod) {
+        StringSet kernel_funcs;
+        for (Function &fn : *mod.get()) {
+          if (fn.isDeclaration() || fn.empty()) {
+            continue;
+          }
+          kernel_funcs.insert(fn.getName().str());
+        }
+        kernel_map.insert(std::make_pair(line, kernel_funcs));
+      } else {
+        cout << "Skipping: " << line << endl;
+      }
+    }
+  }
+  return kernel_map;
+}
+
+KernelModulesMap synchronousPass(String driver_bc,
+                                 KernelModulesMap kernel_map) {
   KernelModulesMap kernel_bc_funcs_map;
   StringSet needed_kernel_funcs;
 
   LLVMContext context;
   SMDiagnostic error;
 
-  std::ifstream kernel_bc_files(kernel_bc);
-
   IRModule driver_mod = parseIRFile(driver_bc, error, context);
+
+  if (!driver_mod) {
+    return kernel_bc_funcs_map;
+  }
 
   needed_kernel_funcs = getUndefinedFuncs(driver_mod);
 
-  if (kernel_bc_files.is_open()) {
-    std::string line;
-    // TODO: Exclusions should not omit files from drivers/base
-    std::list<std::string> exclusions = {
-      "..", "builtin", "/drivers/"};
-    auto skip_line = [&](auto line) {
-      bool ok = false;
-      for (auto &s : exclusions) {
-          ok |= (line.find(s) != std::string::npos);
-      }
-      return ok;
-    };
-    while (std::getline(kernel_bc_files, line)) {
-      if (skip_line(line)) {
-        // skip this line
+  auto extract_funcs = [&](auto M) {
+    std::set<String> needed_funcs;
+    // cout << "Module : " << M->getModuleIdentifier() << endl;
+    for (Function &fn : *M) {
+      if (fn.isDeclaration() || fn.empty()) {
         continue;
-      }
-      IRModule mod = parseIRFile(line, error, context);
-
-      auto extract_funcs = [&](auto M) {
-        std::set<std::string> needed_funcs;
-        // cout << "Module : " << M->getModuleIdentifier() << endl;
-        for (Function &fn: *M) {
-          if (fn.isDeclaration() || fn.empty()) {
-            continue;
-          } else if (needed_kernel_funcs.find(fn.getName().str()) != needed_kernel_funcs.end()) {
-            // we need this bc file for kernel.bc
-            // cout << "\tMatched function " << fn.getName().data() << endl;
-            needed_funcs.insert(fn.getName().str());
-          }
-        }
-        return needed_funcs;
-      };
-
-      if (mod) {
-        auto needed_list = extract_funcs(mod.get());
-        //auto needed_list = extract_transitive_closures(mod.get(), needed_kernel_funcs);
-        if (!needed_list.empty()) {
-          kernel_bc_funcs_map[line] = needed_list;
-        }
-        //kernel_bc_map[line] = std::move(mod);
-      } else {
-        cout << "Skipping: " << line << endl;
+      } else if (needed_kernel_funcs.find(fn.getName().str()) !=
+                 needed_kernel_funcs.end()) {
+        // we need this bc file for kernel.bc
+        // cout << "\tMatched function " << fn.getName().data() << endl;
+        needed_funcs.insert(fn.getName().str());
       }
     }
-    kernel_bc_files.close();
+    return needed_funcs;
+  };
+
+  auto extract_needed_funcs = [&](auto set) {
+    StringSet needed_funcs;
+    for (auto &fn : set) {
+      if (needed_kernel_funcs.find(fn) != needed_kernel_funcs.end()) {
+        // we need this bc file for kernel.bc
+        // cout << "\tMatched function " << fn.getName().data() << endl;
+        needed_funcs.insert(fn);
+      }
+    }
+    return needed_funcs;
+  };
+
+  for (auto &bc : kernel_map) {
+    StringSet funcs = bc.second;
+
+    auto needed_list = extract_needed_funcs(funcs);
+    // auto needed_list = extract_transitive_closures(mod.get(),
+    // needed_kernel_funcs);
+    if (!needed_list.empty()) {
+      kernel_bc_funcs_map[bc.first] = needed_list;
+    }
+    // kernel_bc_map[line] = std::move(mod);
   }
   return kernel_bc_funcs_map;
 }
@@ -209,8 +302,9 @@ KernelModulesMap synchronousPass(std::string driver_bc, std::string kernel_bc) {
 // list of functions directly reached from the driver
 // asynchronous:
 // list of call sites that indirectly invoke the driver functions
-// 1) which driver function are passed across the boundary (i.e., registered with a subsystem)
-void asynchronousPass(std::string driver_bc, std::string kernel_bc) {
+// 1) which driver function are passed across the boundary (i.e., registered
+// with a subsystem)
+void asynchronousPass(String driver_bc, String kernel_bc) {
   KernelModulesMap kernel_bc_funcs_map;
   StringSet needed_kernel_funcs;
 
@@ -222,87 +316,123 @@ void asynchronousPass(std::string driver_bc, std::string kernel_bc) {
   IRModule driver_mod = parseIRFile(driver_bc, error, context);
 
   needed_kernel_funcs = getDefinedFuncs(driver_mod);
-
-#if 0
-  if (kernel_bc_files.is_open()) {
-    std::string line;
-    std::list<std::string> exclusions = {
-      "..", "builtin", "/drivers/"};
-    auto skip_line = [&](auto line) {
-      bool ok = false;
-      for (auto &s : exclusions) {
-          ok |= (line.find(s) != std::string::npos);
-      }
-      return ok;
-    };
-    while (std::getline(kernel_bc_files, line)) {
-      if (skip_line(line)) {
-        // skip this line
-        continue;
-      }
-      IRModule mod = parseIRFile(line, error, context);
- 
-      auto extract_funcs = [&](auto M) {
-        std::set<std::string> needed_funcs;
-        // cout << "Module : " << M->getModuleIdentifier() << endl;
-        for (Function &fn: *M) {
-          if (fn.isDeclaration() || fn.empty()) {
-            continue;
-          } else if (needed_kernel_funcs.find(fn.getName().str()) != needed_kernel_funcs.end()) {
-            // we need this bc file for kernel.bc
-            // cout << "\tMatched function " << fn.getName().data() << endl;
-            needed_funcs.insert(fn.getName().str());
-          }
-        }
-        return needed_funcs;
-      };
-
-      if (mod) {
-        auto needed_list = extract_funcs(mod.get());
-        if (!needed_list.empty()) {
-          kernel_bc_funcs_map[line] = needed_list;
-        }
-        //kernel_bc_map[line] = std::move(mod);
-      } else {
-        cout << "Skipping: " << line << endl;
-      }
-    }
-    kernel_bc_files.close();
-  }
-  return kernel_bc_funcs_map;
-#endif
 }
 
 // Synchronous functions
-// 1) Find the list of declared (but not defined) functions in the driver bc file
-// 2) Parse all the bc files that would eventually go into vmlinux.bc (except drivers folder)
-// 3) Extract a list of bc files in the kernel that has the definitions of the undefined functions in step 1
+// 1) Find the list of declared (but not defined) functions in the driver bc
+// file 2) Parse all the bc files that would eventually go into vmlinux.bc
+// (except drivers folder) 3) Extract a list of bc files in the kernel that has
+// the definitions of the undefined functions in step 1
 int main(int argc, char const *argv[]) {
   LLVMContext context;
   SMDiagnostic error;
 
-  std::unordered_map<std::string, IRModule> kernel_bc_map;
+  std::unordered_map<String, IRModule> kernel_bc_map;
 
   if (argc != 4) {
     usage();
   }
 
-  std::string driver_bc(argv[1]);
-  std::string kernel_bc_files(argv[2]);
-  std::string liblcd_funcs(argv[3]);
+  String driver_list(argv[1]);
+  String kernel_list(argv[2]);
+  String liblcd_funcs(argv[3]);
 
   populateLiblcdFuncs(liblcd_funcs);
 
-  auto kernel_bc_funcs_map = synchronousPass(driver_bc, kernel_bc_files);
+  ModuleMap ko_map;
 
-  cout << "Synchronous pass Done!" << endl;
+  std::ifstream driver_bc_files(driver_list);
 
-  for (auto &kv : kernel_bc_funcs_map) {
-    cout << kv.first << "\n";
-    for (auto &fn : kv.second) {
-      cout << "\t" << fn.data() << "\n";
+  auto kernel_map = filterKernelBcFiles(kernel_list);
+
+  if (driver_bc_files.is_open()) {
+    String driver_ko;
+    while (std::getline(driver_bc_files, driver_ko)) {
+      cout << driver_ko << endl;
+      auto kernel_bc_funcs_map = synchronousPass(driver_ko, kernel_map);
+      ko_map[driver_ko] = kernel_bc_funcs_map;
     }
   }
 
-  asynchronousPass(driver_bc, kernel_bc_files);
+  cout << "Synchronous pass Done!" << endl;
+
+  for (auto &mod : ko_map) {
+    Path ko_path(mod.first);
+    auto ko_name = ko_path.stem().stem();
+    auto ko_fname = ko_path.filename();
+    auto driver_class = getDriverClass(mod.first);
+    Path kernel_bc = ko_name;
+    kernel_bc += "_kernel.bc";
+    auto linked_kernel_bc = ko_path.replace_filename(kernel_bc);
+    cout << "kernel bc: " << linked_kernel_bc << endl;
+    Path dest;
+    dest += BC_FILES_REPO;
+    dest /= driver_class;
+    dest /= ko_name;
+
+    cout << "========= " << mod.first << " =========" << endl;
+
+    // prepare args for llvm-link
+    String llvm_link_args("llvm-link -only-needed -o ");
+    llvm_link_args += linked_kernel_bc;
+
+    String kernel_bc_files;
+
+    // collect the kernel.bc files that are needed for generating
+    // driver_kernel.bc
+    for (auto &kv : mod.second) {
+      cout << kv.first << "\n";
+      kernel_bc_files += " " + kv.first;
+    }
+
+    if (kernel_bc_files.empty()) {
+      cout << "No matching kernel_bc files found! skipping " << mod.first
+           << endl;
+      continue;
+    }
+
+    llvm_link_args += kernel_bc_files;
+    cout << llvm_link_args << endl;
+
+    // invoke llvm-link
+    auto fp = popen(llvm_link_args.c_str(), "r");
+
+    if (!fp) {
+      cout << "Cmd: " << llvm_link_args << " failed!\n" << endl;
+      // TODO: Do what now?
+      continue;
+    }
+
+    String out_buffer;
+    std::array<char, 256> buffer;
+    while (fgets(buffer.data(), 256, fp) != NULL) {
+      out_buffer += buffer.data();
+    }
+
+    if (!out_buffer.empty()) {
+      cout << "cmd output: " << out_buffer << endl;
+    }
+    // auto ret = std::system(llvm_link_args.c_str());
+    // cout << "exit status : " << WEXITSTATUS(ret) << endl;
+
+    // create dest dir if !exists
+    if (!fs::exists(dest)) {
+      cout << "Creating " << dest << endl;
+      fs::create_directories(dest);
+    }
+
+    // Copy driver.ko.bc file
+    cout << "1. Copy " << mod.first << " -> " << dest / ko_fname << endl;
+    fs::copy_file(mod.first, dest / ko_fname,
+                  fs::copy_options::overwrite_existing);
+
+    // Copy driver_kernel.ko.bc file
+    cout << "2. Copy " << linked_kernel_bc << " -> " << dest / kernel_bc
+         << endl;
+    fs::copy_file(linked_kernel_bc, dest / kernel_bc,
+                  fs::copy_options::overwrite_existing);
+    cout << "======================" << endl;
+  }
+
+  // asynchronousPass(driver_bc, kernel_bc_files);
 }
