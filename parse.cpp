@@ -52,6 +52,8 @@ const std::map<String, String> driverClassMap = {
     {"drivers/input", "input"},      {"drivers/i2c", "i2c"},
     {"drivers/leds", "leds"},        {"drivers/misc", "misc"},
     {"drivers/net", "net_ethernet"}, {"drivers/pci/hotplug", "pci_hotplug"},
+    {"drivers/gpu", "gpu"},         {"drivers/md", "md"},
+    {"sound/soc/codecs", "sound"},
 };
 
 LiblcdFuncs *liblcdSet;
@@ -191,9 +193,9 @@ KernelModulesMap filterKernelBcFiles(String kernel_bc_list) {
         "drivers/base",     "drivers/edac/edac_mc",  "drivers/clk",
         "drivers/acpi",     "drivers/powercap",      "drivers/ptp",
         "drivers/oprofile", "drivers/rtc/.rtc-lib",  "drivers/input",
-        "drivers/pci",      "drivers/edac/.edac_mc", "drivers/i2c"};
+        "drivers/pci",      "drivers/edac/.edac_mc", "drivers/i2c", "drivers/gpu/drm/.drm", "drivers/md"};
 
-    std::list<String> exclusions = {"..", "builtin", "/drivers/", ".mod.o.bc",
+    std::list<String> exclusions = {"..", "builtin", "/drivers/", ".mod.o.bc", ".ko.bc",
                                     "arch/x86/boot"};
 
     auto skip_line = [&](auto line) {
