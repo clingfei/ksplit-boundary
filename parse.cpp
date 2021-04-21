@@ -36,7 +36,7 @@ using IRModule = std::unique_ptr<Module>;
 using StringSet = std::set<String>;
 using IRModuleMap = std::unordered_map<String, IRModule>;
 using KernelModulesMap = std::unordered_map<String, StringSet>;
-using ModuleMap = std::unordered_map<String, KernelModulesMap>;
+using ModuleMap = std::unordered_map<String, std::pair<KernelModulesMap, KernelModulesMap>>;
 namespace fs = std::filesystem;
 using Path = fs::path;
 
@@ -102,6 +102,25 @@ String getDriverClass(String ko_file) {
   }
   cout << "class_name: " << class_name << endl;
   return class_name;
+}
+
+StringSet getUndefinedGlobals(std::unique_ptr<Module> &mod_ptr) {
+  auto module = mod_ptr.get();
+  StringSet undefined_globals;
+
+  cout << __func__ << ": module: " << module->getModuleIdentifier() << endl;
+
+  for (auto &g : module->getGlobalList()) {
+    if (g.isDeclaration()) {
+      undefined_globals.insert(g.getName().str());
+    /*cout << g.getName().str() << " is_ext: " << g.isExternallyInitialized()
+        << " hasInitializer: " << g.hasInitializer()
+        << " isDecl: " << g.isDeclaration()
+        << " \n";*/
+    }
+  }
+
+  return undefined_globals;
 }
 
 StringSet getUndefinedFuncs(std::unique_ptr<Module> &mod_ptr) {
@@ -182,8 +201,9 @@ StringSet extract_transitive_closures(Module *M,
 }
 
 // Filter out the kernel bc files by keeping the files we need for the analysis
-KernelModulesMap filterKernelBcFiles(String kernel_bc_list) {
+std::pair<KernelModulesMap, KernelModulesMap> filterKernelBcFiles(String kernel_bc_list) {
   KernelModulesMap kernel_map;
+  KernelModulesMap kernel_global_map;
   std::ifstream kernel_bc_files(kernel_bc_list);
 
   if (kernel_bc_files.is_open()) {
@@ -193,7 +213,10 @@ KernelModulesMap filterKernelBcFiles(String kernel_bc_list) {
         "drivers/base",     "drivers/edac/edac_mc",  "drivers/clk",
         "drivers/acpi",     "drivers/powercap",      "drivers/ptp",
         "drivers/oprofile", "drivers/rtc/.rtc-lib",  "drivers/input",
-        "drivers/pci",      "drivers/edac/.edac_mc", "drivers/i2c", "drivers/gpu/drm/.drm", "drivers/md"};
+        "drivers/pci",      "drivers/edac/.edac_mc", "drivers/i2c",
+        "drivers/gpu/drm/.drm", "drivers/md", "drivers/misc/mei/",
+        "drivers/net/.mdio", "drivers/hwmon/.hwmon",
+    };
 
     std::list<String> exclusions = {"..", "builtin", "/drivers/", ".mod.o.bc", ".ko.bc",
                                     "arch/x86/boot"};
@@ -227,25 +250,41 @@ KernelModulesMap filterKernelBcFiles(String kernel_bc_list) {
 
       if (mod) {
         StringSet kernel_funcs;
+        StringSet kernel_globs;
+
         for (Function &fn : *mod.get()) {
           if (fn.isDeclaration() || fn.empty()) {
             continue;
           }
           kernel_funcs.insert(fn.getName().str());
         }
+        for (auto &g : mod->getGlobalList()) {
+          if (g.isDeclaration()) {
+            continue;
+          }
+          if (g.hasExternalLinkage() && g.isDefinitionExact() && !g.isDeclaration()) {
+            //cout << g.getName().str() << "\n";
+            kernel_globs.insert(g.getName().str());
+          }
+        }
         kernel_map.insert(std::make_pair(line, kernel_funcs));
+        kernel_global_map.insert(std::make_pair(line, kernel_globs));
       } else {
         cout << "Skipping: " << line << endl;
       }
     }
   }
-  return kernel_map;
+  return std::make_pair(kernel_map, kernel_global_map);
 }
 
-KernelModulesMap synchronousPass(String driver_bc,
-                                 KernelModulesMap kernel_map) {
+std::pair<KernelModulesMap, KernelModulesMap>
+synchronousPass(String driver_bc,
+                                 KernelModulesMap kernel_map,
+                                 KernelModulesMap kernel_glob_map) {
   KernelModulesMap kernel_bc_funcs_map;
+  KernelModulesMap kernel_bc_globs_map;
   StringSet needed_kernel_funcs;
+  StringSet needed_kernel_globs;
 
   LLVMContext context;
   SMDiagnostic error;
@@ -253,10 +292,11 @@ KernelModulesMap synchronousPass(String driver_bc,
   IRModule driver_mod = parseIRFile(driver_bc, error, context);
 
   if (!driver_mod) {
-    return kernel_bc_funcs_map;
+    return std::make_pair(kernel_bc_funcs_map, kernel_bc_globs_map);
   }
 
   needed_kernel_funcs = getUndefinedFuncs(driver_mod);
+  needed_kernel_globs = getUndefinedGlobals(driver_mod);
 
   auto extract_funcs = [&](auto M) {
     std::set<String> needed_funcs;
@@ -297,7 +337,33 @@ KernelModulesMap synchronousPass(String driver_bc,
     }
     // kernel_bc_map[line] = std::move(mod);
   }
-  return kernel_bc_funcs_map;
+
+  auto extract_needed_globs = [&](auto set) {
+    StringSet needed_globs;
+    for (auto &g : set) {
+      if (needed_kernel_globs.find(g) != needed_kernel_globs.end()) {
+        // we need this bc file for kernel.bc
+        // cout << "\tMatched function " << fn.getName().data() << endl;
+        needed_globs.insert(g);
+      }
+    }
+    return needed_globs;
+  };
+
+  for (auto &bc : kernel_glob_map) {
+    StringSet globs = bc.second;
+
+    auto needed_list = extract_needed_globs(globs);
+    // auto needed_list = extract_transitive_closures(mod.get(),
+    // needed_kernel_funcs);
+    if (!needed_list.empty()) {
+      kernel_bc_globs_map[bc.first] = needed_list;
+    }
+    // kernel_bc_map[line] = std::move(mod);
+  }
+
+
+  return std::make_pair(kernel_bc_funcs_map, kernel_bc_globs_map);
 }
 
 // synchronous:
@@ -345,14 +411,20 @@ int main(int argc, char const *argv[]) {
 
   std::ifstream driver_bc_files(driver_list);
 
-  auto kernel_map = filterKernelBcFiles(kernel_list);
+  auto [kernel_map, kernel_glob_map] = filterKernelBcFiles(kernel_list);
 
   if (driver_bc_files.is_open()) {
     String driver_ko;
     while (std::getline(driver_bc_files, driver_ko)) {
       cout << driver_ko << endl;
-      auto kernel_bc_funcs_map = synchronousPass(driver_ko, kernel_map);
-      ko_map[driver_ko] = kernel_bc_funcs_map;
+      auto [kernel_bc_funcs_map, kernel_bc_globs_map] = synchronousPass(driver_ko, kernel_map, kernel_glob_map);
+      for (auto &[k, v] : kernel_bc_globs_map) {
+        cout << k << ": \n";
+        for (auto &s : v) {
+          cout << "\t" << s << "\n";
+        }
+      }
+      ko_map[driver_ko] = std::make_pair(kernel_bc_funcs_map, kernel_bc_globs_map);
     }
   }
 
@@ -382,7 +454,13 @@ int main(int argc, char const *argv[]) {
 
     // collect the kernel.bc files that are needed for generating
     // driver_kernel.bc
-    for (auto &kv : mod.second) {
+    auto &[func_map, glob_map] = mod.second;
+    for (auto &kv : func_map) {
+      cout << kv.first << "\n";
+      kernel_bc_files += " " + kv.first;
+    }
+
+    for (auto &kv : glob_map) {
       cout << kv.first << "\n";
       kernel_bc_files += " " + kv.first;
     }
