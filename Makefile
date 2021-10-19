@@ -4,7 +4,7 @@ CXXFLAGS += -g -std=c++2a -Wall
 CXXFLAGS += -I /usr/include/llvm-10 -I /usr/include/llvm-c-10/
 
 
-LD_FLAGS += -lLLVM-10
+LD_FLAGS += -lLLVM
 
 all:
 	$(CXX) -o parse parse.cpp $(CXXFLAGS) $(LD_FLAGS)

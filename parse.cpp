@@ -53,7 +53,11 @@ const std::map<String, String> driverClassMap = {
     {"drivers/leds", "leds"},        {"drivers/misc", "misc"},
     {"drivers/net", "net_ethernet"}, {"drivers/pci/hotplug", "pci_hotplug"},
     {"drivers/gpu", "gpu"},         {"drivers/md", "md"},
-    {"sound/soc/codecs", "sound"},
+    {"sound/soc/codecs", "sound"},  {"drivers/nvme", "block"},
+    {"drivers/powercap", "powercap"}, {"drivers/pinctrl", "pinctrl"},
+    {"drivers/i2c", "i2c"}, {"drivers/spi", "spi"},
+    {"drivers/w1", "one-wire"}, {"drivers/usb", "usb"},
+    {"drivers/tty", "tty"}
 };
 
 LiblcdFuncs *liblcdSet;
@@ -215,7 +219,7 @@ std::pair<KernelModulesMap, KernelModulesMap> filterKernelBcFiles(String kernel_
         "drivers/oprofile", "drivers/rtc/.rtc-lib",  "drivers/input",
         "drivers/pci",      "drivers/edac/.edac_mc", "drivers/i2c",
         "drivers/gpu/drm/.drm", "drivers/md", "drivers/misc/mei/",
-        "drivers/net/.mdio", "drivers/hwmon/.hwmon",
+        "drivers/net/.mdio", "drivers/hwmon/.hwmon", "drivers/nvme/host/.core"
     };
 
     std::list<String> exclusions = {"..", "builtin", "/drivers/", ".mod.o.bc", ".ko.bc",
@@ -292,6 +296,7 @@ synchronousPass(String driver_bc,
   IRModule driver_mod = parseIRFile(driver_bc, error, context);
 
   if (!driver_mod) {
+    cout << "Couldn't parse IR file " << driver_bc << "\n";
     return std::make_pair(kernel_bc_funcs_map, kernel_bc_globs_map);
   }
 
@@ -447,22 +452,31 @@ int main(int argc, char const *argv[]) {
     cout << "========= " << mod.first << " =========" << endl;
 
     // prepare args for llvm-link
-    String llvm_link_args("llvm-link -only-needed -o ");
+    //String llvm_link_args("llvm-link -only-needed -o ");
+    String llvm_link_args("llvm-link -o ");
     llvm_link_args += linked_kernel_bc;
 
     String kernel_bc_files;
+    StringSet kernel_bc_set;
 
     // collect the kernel.bc files that are needed for generating
     // driver_kernel.bc
     auto &[func_map, glob_map] = mod.second;
     for (auto &kv : func_map) {
       cout << kv.first << "\n";
-      kernel_bc_files += " " + kv.first;
+
+      kernel_bc_set.insert(kv.first);
+      //kernel_bc_files += " " + kv.first;
     }
 
     for (auto &kv : glob_map) {
       cout << kv.first << "\n";
-      kernel_bc_files += " " + kv.first;
+      //kernel_bc_files += " " + kv.first;
+      kernel_bc_set.insert(kv.first);
+    }
+
+    for (auto &bc : kernel_bc_set) {
+      kernel_bc_files += " " + bc;
     }
 
     if (kernel_bc_files.empty()) {
