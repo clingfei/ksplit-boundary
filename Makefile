@@ -1,6 +1,7 @@
 
 CXX := clang++
 CXXFLAGS += -g -std=c++2a -Wall
+# if running with nix, comment this out
 CXXFLAGS += -I /usr/include/llvm-10 -I /usr/include/llvm-c-10/
 
 
