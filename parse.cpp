@@ -219,7 +219,8 @@ std::pair<KernelModulesMap, KernelModulesMap> filterKernelBcFiles(String kernel_
         "drivers/oprofile", "drivers/rtc/.rtc-lib",  "drivers/input",
         "drivers/pci",      "drivers/edac/.edac_mc", "drivers/i2c",
         "drivers/gpu/drm/.drm", "drivers/md", "drivers/misc/mei/",
-        "drivers/net/.mdio", "drivers/hwmon/.hwmon", "drivers/nvme/host/.core"
+        "drivers/net/.mdio", "drivers/hwmon/.hwmon", "drivers/nvme/host/.core",
+        "drivers/usb/core",
     };
 
     std::list<String> exclusions = {"..", "builtin", "/drivers/", ".mod.o.bc", ".ko.bc",
