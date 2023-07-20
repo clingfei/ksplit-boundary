@@ -45,7 +45,7 @@ namespace fs = std::filesystem;
 using Path = fs::path;
 
 const char *PROG_NAME = "ksplit-bnd";
-constexpr auto bc_files_dir = "/home/xl/linux-5.12.10-device/bc-files";
+constexpr auto bc_files_dir = "/home/clf/linux-5.10.112-device/bc-files";
 const Path BC_FILES_REPO = Path(bc_files_dir);
 
 const std::map<String, String> driverClassMap = {
@@ -278,7 +278,25 @@ std::pair<KernelModulesMap, KernelModulesMap> filterKernelBcFiles(String kernel_
     };
 
     std::list<String> exclusions = {"..", "builtin", "/drivers/", ".mod.o.bc", ".ko.bc",
-                                    "arch/x86/boot"};
+                                    "arch/x86/boot",
+                                    // added by myself 
+                                    /*
+                                     * Error:
+                                     * Attribute 'elementtype' can only be applied to intrinsics.
+                                     * LLVM ERROR: Broken module found, compilation aborted!
+                                    */
+                                    // Error: Attribute 'elementtype' can only be applied to intrinsics.
+                                    "linux-5.10.112/kernel/trace/.trace_irqsoff.o.bc",
+                                    "linux-5.10.112/kernel/trace/.trace_functions_graph.o.bc",
+                                    "linux-5.10.112/kernel/trace/.fgraph.o.bc",
+                                    "linux-5.10.112/kernel/trace/.trace_hwlat.o.bc",
+                                    "linux-5.10.112/kernel/trace/.preemptirq_delay_test.o.bc",
+                                    "linux-5.10.112/kernel/trace/.preemptirq_delay_test.o.bc",
+                                    "linux-5.10.112/kernel/trace/.tracing_map.o.bc",
+                                    "linux-5.10.112/kernel/trace/.trace_kdb.o.bc",
+                                    "linux-5.10.112/kernel/trace/.trace_preemptirq.o.bc",
+                                    "linux-5.10.112/kernel/trace/.trace_stack.o.bc",
+                                    "linux-5.10.112/kernel/trace/"};
 
     auto skip_line = [&](auto line)
     {
@@ -312,10 +330,10 @@ std::pair<KernelModulesMap, KernelModulesMap> filterKernelBcFiles(String kernel_
       }
       LLVMContext context;
       SMDiagnostic error;
-      IRModule mod = parseIRFile(line, error, context);
 #ifdef DEBUG
   std::cout << "parsing IR file: " << line << "\n";
 #endif
+      IRModule mod = parseIRFile(line, error, context);
       if (mod)
       {
         StringSet kernel_funcs;
@@ -563,7 +581,7 @@ int main(int argc, char const *argv[])
 
     // prepare args for llvm-link
     // String llvm_link_args("llvm-link -only-needed -o ");
-    String llvm_link_args("llvm-link -only-needed -o ");
+    String llvm_link_args("llvm-link -o ");
     llvm_link_args += linked_kernel_bc;
 
     String kernel_bc_files;

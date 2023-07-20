@@ -1,2 +1,7 @@
 build/
 .vscode/
+.cache
+driver_bc.list
+kernel_bc.list
+liblcd_funcs.txt
+
