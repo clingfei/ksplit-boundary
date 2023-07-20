@@ -5,7 +5,7 @@
 cd llvm-10.0
 mkdir build
 cd build
-cmake -G Ninja -DLLVM_ENABLE_PROJECTS="clang;libcxx;libcxxabi;compiler-rt;lld" -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_USE_LINKER=gold ..
+cmake -G Ninja -DLLVM_ENABLE_PROJECTS="clang;libcxx;libcxxabi;compiler-rt;lld" -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_USE_LINKER=gold ../llvm
 ninja
 ```
 
