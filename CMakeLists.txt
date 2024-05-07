@@ -35,9 +35,9 @@ if (DEFINED ENV{LLVM_DIR})
     message(${LLVM_DEFINITIONS})
     message(${LLVM_LIBRARY_DIRS})
     message(${LLVM_INCLUDE_DIRS})
-
+    add_subdirectory(typm)
     add_executable(parse parse.cpp)
-    target_link_libraries(parse LLVMSupport LLVMAnalysis LLVMCore LLVMIRReader)
+    target_link_libraries(parse LLVMSupport LLVMAnalysis LLVMCore LLVMIRReader kanalyzer)
 
 else()
     message(FATAL_ERROR "\
