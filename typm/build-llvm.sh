@@ -14,7 +14,7 @@ fi
 
 cd build
 
-cmake -DLLVM_TARGET_ARCH="X86" \
+cmake -DLLVM_TARGET_ARCH="AArch64" \
 			-DLLVM_TARGETS_TO_BUILD="ARM;X86;AArch64" \
 			-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=WebAssembly \
 			-DCMAKE_BUILD_TYPE=Release \
@@ -24,8 +24,8 @@ cmake -DLLVM_TARGET_ARCH="X86" \
 
 make -j$(nproc)
 
-if [ ! -d "$ROOT/llvm-project/prefix" ]; then
-  mkdir $ROOT/llvm-project/prefix
-fi
+# if [ ! -d "$ROOT/llvm-project/prefix" ]; then
+#   mkdir $ROOT/llvm-project/prefix
+# fi
 
-cmake -DCMAKE_INSTALL_PREFIX=$ROOT/llvm-project/prefix -P cmake_install.cmake
+# cmake -DCMAKE_INSTALL_PREFIX=$ROOT/llvm-project/prefix -P cmake_install.cmake
