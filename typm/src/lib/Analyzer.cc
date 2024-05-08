@@ -220,7 +220,9 @@ typm_init(std::string driver_ko, std::vector<std::string> &kernel_list, std::str
     std::ifstream target_funcs(func_list);
     if (!target_funcs.is_open()) {
         errs() << "error when loading : " << func_list << "\n";
+        return result;
     }
+    errs() << "load " << func_list << " successfully\n";
     std::string func_name;
     while (std::getline(target_funcs, func_name)) {
         Function *func = driver_module->getFunction(func_name);
@@ -228,9 +230,9 @@ typm_init(std::string driver_ko, std::vector<std::string> &kernel_list, std::str
             errs() << "cannot find " << func->getName() << "\n";
             continue;
         }
-        outs() << "dump result for " << func->getName() << "\n";
+        errs() << "dump result for " << func->getName() << "\n";
         for (auto filename : GlobalCtx.CallerFiles[func]) {
-            outs() << filename << "\n";
+            errs() << filename << "\n";
             result[func->getName().str()].insert(filename);
         }
     }

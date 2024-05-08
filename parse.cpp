@@ -236,30 +236,30 @@ filterKernelBcFiles(String kernel_bc_list) {
     // driver_dirs中包含的是drivers下面的不应该被过滤掉的路径
     std::list<String> driver_dirs = {
         "drivers/base",
-        "drivers/edac/edac_mc",
-        "drivers/clk",
-        "drivers/acpi",
-        "drivers/powercap",
-        "drivers/ptp",
-        "drivers/oprofile",
+        // "drivers/edac/edac_mc",
+        // "drivers/clk",
+        // "drivers/acpi",
+        // "drivers/powercap",
+        // "drivers/ptp",
+        // "drivers/oprofile",
         "drivers/rtc/.rtc-lib",
-        "drivers/rtc/interface",
-        "drivers/input",
-        "drivers/pci",
-        "drivers/edac/.edac_mc",
-        "drivers/i2c",
-        "drivers/gpu/drm/.drm",
-        "drivers/md",
-        "drivers/misc/mei/",
-        "drivers/net/.mdio",
-        "drivers/hwmon/.hwmon",
-        "drivers/nvme/host/.core",
-        "drivers/usb/core",
+        "drivers/rtc/.interface",
+        // "drivers/input",
+        // "drivers/pci",
+        // "drivers/edac/.edac_mc",
+        // "drivers/i2c",
+        // "drivers/gpu/drm/.drm",
+        // "drivers/md",
+        // "drivers/misc/mei/",
+        // "drivers/net/.mdio",
+        // "drivers/hwmon/.hwmon",
+        // "drivers/nvme/host/.core",
+        // "drivers/usb/core",
     };
 
     std::list<String> exclusions = {
-        "..", "builtin", "/drivers/", ".mod.o.bc", ".ko.bc", "arch/arm64/boot",
-        "sound",
+        "..", "builtin", "drivers/", ".mod.o.bc", ".ko.bc", "arch/arm64/boot",
+        "sound", "crypto", "kasan", "kcsan", "printk",
         // added by myself
         /*
          * Error:
@@ -554,12 +554,6 @@ int main(int argc, char const *argv[]) {
 
     // collect the kernel.bc files that are needed for generating
     // driver_kernel.bc
-    for (auto filename : async_results[mod.first]) {
-      kernel_bc_set.insert(filename);
-    }
-
-    // collect the kernel.bc files that are needed for generating
-    // driver_kernel.bc
     auto &[func_map, glob_map] = mod.second;
     for (auto &kv : func_map) {
       cout << kv.first << "\n";
@@ -575,8 +569,15 @@ int main(int argc, char const *argv[]) {
     }
 
     std::ofstream bc_set("kernel_bc_set");
+    bc_set << "===================================synchronous result=========================\n";
     for (auto &bc : kernel_bc_set) {
       bc_set << bc << "\n";
+    }
+    bc_set << "===================================asynchronous result=========================\n";
+    // collect the kernel.bc files that are needed for generating
+    // driver_kernel.bc
+    for (auto filename : async_results[mod.first]) {
+      kernel_bc_set.insert(filename);
     }
     bc_set.close();
 

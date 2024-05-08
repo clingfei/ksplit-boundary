@@ -94,7 +94,9 @@ void CallGraphPass::PhaseMLTA(Function *F) {
 #ifdef MAP_CALLER_TO_CALLEE
 				for (Function *Callee : *FS) {
 					Ctx->Callers[Callee].insert(CI);
-                    Ctx->CallerFiles[Callee].insert(CI->getModule()->getSourceFileName());
+                    // auto srcFileName = CI->getModule()->getSourceFileName();
+                    // auto idx = srcFileName.find_last_of('/');
+                    Ctx->CallerFiles[Callee].insert(CI->getModule()->getModuleIdentifier());
 				}
 #endif
 
@@ -125,7 +127,9 @@ void CallGraphPass::PhaseMLTA(Function *F) {
 
 #ifdef MAP_CALLER_TO_CALLEE
 					Ctx->Callers[CF].insert(CI);
-                    Ctx->CallerFiles[CF].insert(CI->getModule()->getSourceFileName());
+                    // auto srcFileName = CI->getModule()->getSourceFileName();
+                    // auto idx = srcFileName.find_last_of('/');
+                    Ctx->CallerFiles[CF].insert(CI->getModule()->getModuleIdentifier());
 #endif
 				}
 				// InlineAsm
@@ -397,7 +401,7 @@ void CallGraphPass::PhaseMLTA(Function *F) {
 	}
 
 	bool CallGraphPass::doFinalization(Module *M) {
-        outs() << Ctx->CallerFiles.size() << "\n";
+        errs() << Ctx->CallerFiles.size() << "\n";
 		++ MIdx;
 		if (Ctx->Modules.size() == MIdx) {
 			// Finally map declaration functions to actual functions
