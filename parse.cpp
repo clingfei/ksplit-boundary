@@ -242,8 +242,7 @@ filterKernelBcFiles(String kernel_bc_list) {
         // "drivers/powercap",
         // "drivers/ptp",
         // "drivers/oprofile",
-        "drivers/rtc/.rtc-lib",
-        "drivers/rtc/.interface",
+        "drivers/rtc/",
         // "drivers/input",
         // "drivers/pci",
         // "drivers/edac/.edac_mc",
@@ -260,6 +259,7 @@ filterKernelBcFiles(String kernel_bc_list) {
     std::list<String> exclusions = {
         "..", "builtin", "drivers/", ".mod.o.bc", ".ko.bc", "arch/arm64/boot",
         "sound", "crypto", "kasan", "kcsan", "printk",
+        "kernel/.kcov",
         // added by myself
         /*
          * Error:
@@ -546,7 +546,7 @@ int main(int argc, char const *argv[]) {
 
     // prepare args for llvm-link
     // String llvm_link_args("llvm-link -only-needed -o ");
-    String llvm_link_args("llvm-link -only-needed -o ");
+    String llvm_link_args("llvm-link -o ");
     llvm_link_args += linked_kernel_bc;
 
     String kernel_bc_files;
@@ -578,6 +578,9 @@ int main(int argc, char const *argv[]) {
     // driver_kernel.bc
     for (auto filename : async_results[mod.first]) {
       kernel_bc_set.insert(filename);
+    }
+    for (auto &bc : kernel_bc_set) {
+      bc_set << bc << "\n";
     }
     bc_set.close();
 
